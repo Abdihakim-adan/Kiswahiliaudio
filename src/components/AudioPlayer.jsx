@@ -1,52 +1,77 @@
-// src/components/Audio.jsx
+// src/components/AudioPlayer.jsx
 import React, { useState, useRef, useEffect } from 'react';
+import { getAudioUrl, getPageInfo } from '../api/audio';
 
-// Adjust TOTAL_PAGES to match the number of MP3 files you have
 const TOTAL_PAGES = 604;
-
-// Helper: format page number to 3 digits (e.g., 1 -> "001")
-const formatPageNumber = (page) => String(page).padStart(3, '0');
-
-// Build audio URL based on page number.
-// Files must be placed in public/audio/ folder
-const getAudioUrl = (page) => `/audio/page${formatPageNumber(page)}.mp3`;
 
 const AudioPlayer = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(true);
+  const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const [error, setError] = useState(null);
-  const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
-  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
+  const [audioInitialized, setAudioInitialized] = useState(false);
+  const [audioContext, setAudioContext] = useState(null);
   const audioRef = useRef(null);
+  const hasAutoPlayedRef = useRef(false);
 
-  // Auto-play on initial load (with browser policy handling)
-  useEffect(() => {
-    if (!hasAutoPlayed && !isLoading && !error && !needsUserInteraction) {
-      // Small delay to ensure audio is ready
-      const timer = setTimeout(async () => {
-        try {
-          const audio = audioRef.current;
-          if (audio && audio.src) {
-            await audio.play();
-            setIsPlaying(true);
-            setHasAutoPlayed(true);
-          }
-        } catch (err) {
-          console.log('Auto-play blocked by browser:', err);
-          setNeedsUserInteraction(true);
-          setError('Click play to start listening');
-        }
-      }, 500);
-      return () => clearTimeout(timer);
+  // Initialize audio on first user interaction
+  const initializeAudio = async () => {
+    if (audioInitialized) return true;
+    
+    try {
+      // Create AudioContext for browsers that need it
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const context = new AudioContextClass();
+      setAudioContext(context);
+      
+      // Resume context
+      await context.resume();
+      
+      // Test play a silent buffer to enable audio
+      const buffer = context.createBuffer(1, 1, 22050);
+      const source = context.createBufferSource();
+      source.buffer = buffer;
+      source.connect(context.destination);
+      source.start();
+      
+      setAudioInitialized(true);
+      return true;
+    } catch (err) {
+      console.error('Audio initialization failed:', err);
+      return false;
     }
-  }, [hasAutoPlayed, isLoading, error, needsUserInteraction]);
+  };
 
-  // Handle play/pause and loading state when currentPage changes
+  // Handle first click anywhere on the page
+  useEffect(() => {
+    const handleFirstInteraction = async () => {
+      if (!audioInitialized) {
+        const success = await initializeAudio();
+        if (success && !hasAutoPlayedRef.current) {
+          // Start playing after initialization
+          setIsPlaying(true);
+          hasAutoPlayedRef.current = true;
+        }
+      }
+    };
+
+    // Add event listeners for first interaction
+    window.addEventListener('click', handleFirstInteraction);
+    window.addEventListener('touchstart', handleFirstInteraction);
+    window.addEventListener('keydown', handleFirstInteraction);
+
+    return () => {
+      window.removeEventListener('click', handleFirstInteraction);
+      window.removeEventListener('touchstart', handleFirstInteraction);
+      window.removeEventListener('keydown', handleFirstInteraction);
+    };
+  }, [audioInitialized]);
+
+  // Handle audio playback
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || !audioInitialized) return;
 
     const url = getAudioUrl(currentPage);
     if (audio.src !== url) {
@@ -54,7 +79,6 @@ const AudioPlayer = () => {
       audio.load();
       setError(null);
       setIsLoading(true);
-      setNeedsUserInteraction(false);
     }
 
     if (isPlaying) {
@@ -63,10 +87,9 @@ const AudioPlayer = () => {
         playPromise.catch((err) => {
           console.error('Playback failed:', err);
           if (err.name === 'NotAllowedError') {
-            setNeedsUserInteraction(true);
-            setError('Click play to start listening (browser auto-play policy)');
+            setError('Click anywhere on the page to enable audio');
           } else {
-            setError('Unable to play audio. File may be missing or format unsupported.');
+            setError('Unable to play audio. File may be missing.');
           }
           setIsPlaying(false);
         });
@@ -74,7 +97,7 @@ const AudioPlayer = () => {
     } else {
       audio.pause();
     }
-  }, [currentPage, isPlaying]);
+  }, [currentPage, isPlaying, audioInitialized]);
 
   // Listen for audio events
   useEffect(() => {
@@ -94,8 +117,9 @@ const AudioPlayer = () => {
     
     const handleEnded = () => {
       setIsPlaying(false);
-      if (autoPlay && currentPage < TOTAL_PAGES) {
-        goToPage(currentPage + 1);
+      if (autoPlayEnabled && currentPage < TOTAL_PAGES) {
+        setCurrentPage(p => p + 1);
+        setIsPlaying(true);
       }
     };
 
@@ -108,32 +132,27 @@ const AudioPlayer = () => {
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [currentPage, autoPlay]);
+  }, [currentPage, autoPlayEnabled]);
 
-  // Toggle play/pause
-  const togglePlayPause = () => {
-    if (error) setError(null);
-    if (!getAudioUrl(currentPage)) {
-      setError(`Audio for page ${currentPage} not found.`);
-      return;
+  const togglePlayPause = async () => {
+    if (!audioInitialized) {
+      await initializeAudio();
     }
-    setNeedsUserInteraction(false);
-    setIsPlaying((prev) => !prev);
+    setIsPlaying(prev => !prev);
   };
 
-  // Change page
-  const goToPage = (page) => {
+  const goToPage = async (page) => {
     if (page < 1 || page > TOTAL_PAGES) return;
     setCurrentPage(page);
+    if (!audioInitialized) {
+      await initializeAudio();
+    }
     setIsPlaying(true);
-    setHasAutoPlayed(true);
-    setNeedsUserInteraction(false);
   };
 
   const nextPage = () => goToPage(currentPage + 1);
   const prevPage = () => goToPage(currentPage - 1);
 
-  // Inline styles
   const styles = {
     container: {
       maxWidth: '600px',
@@ -173,19 +192,14 @@ const AudioPlayer = () => {
       background: 'white',
       color: '#667eea',
       cursor: 'pointer',
-      transition: 'transform 0.2s, box-shadow 0.2s',
+      transition: 'transform 0.2s',
       fontWeight: 'bold',
       boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
-    },
-    buttonHover: {
-      transform: 'scale(1.05)',
-      boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
     },
     buttonDisabled: {
       background: '#ccc',
       color: '#666',
       cursor: 'not-allowed',
-      transform: 'none',
     },
     playButton: {
       padding: '0.7rem 2rem',
@@ -209,12 +223,6 @@ const AudioPlayer = () => {
       borderRadius: '3px',
       background: 'white',
       WebkitAppearance: 'none',
-    },
-    rangeWebkit: {
-      WebkitAppearance: 'none',
-      height: '6px',
-      borderRadius: '3px',
-      background: 'white',
     },
     sliderLabels: {
       display: 'flex',
@@ -262,20 +270,46 @@ const AudioPlayer = () => {
       padding: '0.5rem',
       borderRadius: '8px',
     },
-    interactionPrompt: {
+    enablePrompt: {
       textAlign: 'center',
-      fontSize: '0.9rem',
+      fontSize: '1rem',
       color: '#ffeaa7',
-      marginTop: '0.5rem',
-      padding: '0.5rem',
+      marginTop: '1rem',
+      padding: '1rem',
       background: 'rgba(0,0,0,0.3)',
-      borderRadius: '8px',
+      borderRadius: '12px',
       cursor: 'pointer',
+      animation: 'pulse 2s infinite',
     },
   };
 
+  // Show enable prompt if audio not initialized
+  if (!audioInitialized) {
+    return (
+      <div style={styles.container}>
+        <h2 style={styles.title}>🎧 Kiswahili Audio Player</h2>
+        <div style={styles.enablePrompt}>
+          🎵 Click anywhere on this page to enable auto-play 🎵
+          <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>
+            Then audio will play automatically for all pages
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main player view
   return (
     <div style={styles.container}>
+      <style>
+        {`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+          }
+        `}
+      </style>
+      
       <h2 style={styles.title}>🎧 Kiswahili Audio Player</h2>
 
       <audio ref={audioRef} preload="auto" />
@@ -292,12 +326,6 @@ const AudioPlayer = () => {
             ...styles.button,
             ...(currentPage <= 1 ? styles.buttonDisabled : {}),
           }}
-          onMouseEnter={(e) => {
-            if (currentPage > 1) e.target.style.transform = 'scale(1.05)';
-          }}
-          onMouseLeave={(e) => {
-            e.target.style.transform = 'scale(1)';
-          }}
         >
           ⏮ Prev
         </button>
@@ -310,12 +338,6 @@ const AudioPlayer = () => {
             ...styles.playButton,
             ...(isLoading ? styles.buttonDisabled : {}),
           }}
-          onMouseEnter={(e) => {
-            if (!isLoading) e.target.style.transform = 'scale(1.05)';
-          }}
-          onMouseLeave={(e) => {
-            e.target.style.transform = 'scale(1)';
-          }}
         >
           {isLoading ? '⏳ Loading...' : isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>
@@ -327,12 +349,6 @@ const AudioPlayer = () => {
             ...styles.button,
             ...(currentPage >= TOTAL_PAGES ? styles.buttonDisabled : {}),
           }}
-          onMouseEnter={(e) => {
-            if (currentPage < TOTAL_PAGES) e.target.style.transform = 'scale(1.05)';
-          }}
-          onMouseLeave={(e) => {
-            e.target.style.transform = 'scale(1)';
-          }}
         >
           Next ⏭
         </button>
@@ -342,8 +358,8 @@ const AudioPlayer = () => {
         <label>
           <input
             type="checkbox"
-            checked={autoPlay}
-            onChange={(e) => setAutoPlay(e.target.checked)}
+            checked={autoPlayEnabled}
+            onChange={(e) => setAutoPlayEnabled(e.target.checked)}
             style={{ marginRight: '8px' }}
           />
           🔄 Auto‑play next page
@@ -357,10 +373,7 @@ const AudioPlayer = () => {
           max={TOTAL_PAGES}
           value={currentPage}
           onChange={(e) => goToPage(parseInt(e.target.value, 10))}
-          style={{
-            ...styles.range,
-            ...styles.rangeWebkit,
-          }}
+          style={styles.range}
         />
         <div style={styles.sliderLabels}>
           <span>Page 1</span>
@@ -383,21 +396,7 @@ const AudioPlayer = () => {
       </div>
 
       {isLoading && <div style={styles.loadingText}>🎵 Loading audio...</div>}
-      {error && (
-        <div style={styles.errorText}>
-          ⚠️ {error}
-          {needsUserInteraction && (
-            <div style={{ marginTop: '8px', fontSize: '12px' }}>
-              👆 Click the play button above to start listening
-            </div>
-          )}
-        </div>
-      )}
-      {needsUserInteraction && !error && (
-        <div style={styles.interactionPrompt} onClick={togglePlayPause}>
-          🎵 Click here or press play to start listening
-        </div>
-      )}
+      {error && <div style={styles.errorText}>⚠️ {error}</div>}
     </div>
   );
 };
