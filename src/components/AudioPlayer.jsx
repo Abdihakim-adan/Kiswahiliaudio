@@ -8,18 +8,7 @@ const TOTAL_PAGES = 604;
 const formatPageNumber = (page) => String(page).padStart(3, '0');
 
 // Build audio URL based on page number.
-// Files must be placed in public/audio/ or src/assets/audio/ depending on bundler.
-// This example uses the **public** folder approach for simplicity and reliability in both Vite and CRA.
-// If you prefer to keep files in src/assets/audio/, you would need to import them dynamically.
-// To avoid complex bundler‑specific code, we serve them from the public folder.
-//
-// === INSTRUCTIONS ===
-// 1. Create a folder named "audio" inside the "public" folder of your React project.
-// 2. Place your MP3 files there as page001.mp3, page002.mp3, ...
-// 3. Then the URL will be `/audio/page001.mp3`.
-//
-// If you must use src/assets/audio/, replace the function below with the dynamic import logic.
-// For simplicity and cross‑tool compatibility, the public folder method is recommended.
+// Files must be placed in public/audio/ folder
 const getAudioUrl = (page) => `/audio/page${formatPageNumber(page)}.mp3`;
 
 const AudioPlayer = () => {
@@ -28,7 +17,31 @@ const AudioPlayer = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [autoPlay, setAutoPlay] = useState(true);
   const [error, setError] = useState(null);
+  const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
+  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
   const audioRef = useRef(null);
+
+  // Auto-play on initial load (with browser policy handling)
+  useEffect(() => {
+    if (!hasAutoPlayed && !isLoading && !error && !needsUserInteraction) {
+      // Small delay to ensure audio is ready
+      const timer = setTimeout(async () => {
+        try {
+          const audio = audioRef.current;
+          if (audio && audio.src) {
+            await audio.play();
+            setIsPlaying(true);
+            setHasAutoPlayed(true);
+          }
+        } catch (err) {
+          console.log('Auto-play blocked by browser:', err);
+          setNeedsUserInteraction(true);
+          setError('Click play to start listening');
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [hasAutoPlayed, isLoading, error, needsUserInteraction]);
 
   // Handle play/pause and loading state when currentPage changes
   useEffect(() => {
@@ -41,6 +54,7 @@ const AudioPlayer = () => {
       audio.load();
       setError(null);
       setIsLoading(true);
+      setNeedsUserInteraction(false);
     }
 
     if (isPlaying) {
@@ -48,7 +62,12 @@ const AudioPlayer = () => {
       if (playPromise !== undefined) {
         playPromise.catch((err) => {
           console.error('Playback failed:', err);
-          setError('Unable to play audio. File may be missing or format unsupported.');
+          if (err.name === 'NotAllowedError') {
+            setNeedsUserInteraction(true);
+            setError('Click play to start listening (browser auto-play policy)');
+          } else {
+            setError('Unable to play audio. File may be missing or format unsupported.');
+          }
           setIsPlaying(false);
         });
       }
@@ -57,7 +76,7 @@ const AudioPlayer = () => {
     }
   }, [currentPage, isPlaying]);
 
-  // Listen for loadstart, canplay, and error events
+  // Listen for audio events
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -66,15 +85,17 @@ const AudioPlayer = () => {
       setIsLoading(false);
       setError(null);
     };
+    
     const handleError = () => {
       setIsLoading(false);
       setError(`Failed to load page ${currentPage}. Check if the file exists.`);
       setIsPlaying(false);
     };
+    
     const handleEnded = () => {
       setIsPlaying(false);
       if (autoPlay && currentPage < TOTAL_PAGES) {
-        setCurrentPage((p) => p + 1);
+        goToPage(currentPage + 1);
       }
     };
 
@@ -96,6 +117,7 @@ const AudioPlayer = () => {
       setError(`Audio for page ${currentPage} not found.`);
       return;
     }
+    setNeedsUserInteraction(false);
     setIsPlaying((prev) => !prev);
   };
 
@@ -103,8 +125,9 @@ const AudioPlayer = () => {
   const goToPage = (page) => {
     if (page < 1 || page > TOTAL_PAGES) return;
     setCurrentPage(page);
-    // When manually changing page, auto‑play the new page (unless you prefer to pause)
     setIsPlaying(true);
+    setHasAutoPlayed(true);
+    setNeedsUserInteraction(false);
   };
 
   const nextPage = () => goToPage(currentPage + 1);
@@ -113,25 +136,28 @@ const AudioPlayer = () => {
   // Inline styles
   const styles = {
     container: {
-      maxWidth: '500px',
+      maxWidth: '600px',
       margin: '2rem auto',
       padding: '1.5rem',
-      background: '#f9f9f9',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
       borderRadius: '24px',
-      boxShadow: '0 8px 20px rgba(0,0,0,0.1)',
+      boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
       fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
     },
     title: {
       textAlign: 'center',
-      color: '#1e3a5f',
+      color: 'white',
       marginTop: 0,
       marginBottom: '1rem',
       fontSize: '1.8rem',
+      textShadow: '2px 2px 4px rgba(0,0,0,0.2)',
     },
     pageInfo: {
       textAlign: 'center',
-      fontSize: '1.4rem',
+      fontSize: '1.6rem',
       margin: '1rem 0',
+      color: 'white',
+      fontWeight: 'bold',
     },
     controls: {
       display: 'flex',
@@ -140,27 +166,38 @@ const AudioPlayer = () => {
       margin: '1.5rem 0',
     },
     button: {
-      padding: '0.6rem 1.2rem',
+      padding: '0.7rem 1.5rem',
       fontSize: '1rem',
       border: 'none',
-      borderRadius: '40px',
-      background: '#2c3e66',
-      color: 'white',
+      borderRadius: '50px',
+      background: 'white',
+      color: '#667eea',
       cursor: 'pointer',
-      transition: 'background 0.2s',
+      transition: 'transform 0.2s, box-shadow 0.2s',
+      fontWeight: 'bold',
+      boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+    },
+    buttonHover: {
+      transform: 'scale(1.05)',
+      boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
     },
     buttonDisabled: {
-      background: '#aaa',
+      background: '#ccc',
+      color: '#666',
       cursor: 'not-allowed',
+      transform: 'none',
     },
     playButton: {
-      padding: '0.6rem 1.5rem',
-      fontSize: '1.1rem',
+      padding: '0.7rem 2rem',
+      fontSize: '1.2rem',
+      background: '#ff6b6b',
+      color: 'white',
     },
     autoPlayContainer: {
       margin: '1rem 0',
       textAlign: 'center',
       fontSize: '0.9rem',
+      color: 'white',
     },
     sliderContainer: {
       margin: '1.5rem 0',
@@ -168,12 +205,22 @@ const AudioPlayer = () => {
     range: {
       width: '100%',
       margin: '0.5rem 0',
+      height: '6px',
+      borderRadius: '3px',
+      background: 'white',
+      WebkitAppearance: 'none',
+    },
+    rangeWebkit: {
+      WebkitAppearance: 'none',
+      height: '6px',
+      borderRadius: '3px',
+      background: 'white',
     },
     sliderLabels: {
       display: 'flex',
       justifyContent: 'space-between',
       fontSize: '0.8rem',
-      color: '#555',
+      color: 'white',
     },
     jumpContainer: {
       display: 'flex',
@@ -183,42 +230,58 @@ const AudioPlayer = () => {
     },
     pageInput: {
       width: '80px',
-      padding: '0.4rem',
+      padding: '0.5rem',
       fontSize: '1rem',
       textAlign: 'center',
-      border: '1px solid #ccc',
+      border: 'none',
       borderRadius: '8px',
+      background: 'white',
+      color: '#333',
     },
     goButton: {
-      padding: '0.4rem 1rem',
-      background: '#2c3e66',
-      color: 'white',
+      padding: '0.5rem 1rem',
+      background: 'white',
+      color: '#667eea',
       border: 'none',
       borderRadius: '8px',
       cursor: 'pointer',
+      fontWeight: 'bold',
     },
     loadingText: {
       textAlign: 'center',
       fontSize: '0.85rem',
-      color: '#d97706',
+      color: '#ffeaa7',
       marginTop: '0.5rem',
     },
     errorText: {
       textAlign: 'center',
       fontSize: '0.85rem',
-      color: '#dc2626',
+      color: '#ff7675',
       marginTop: '0.5rem',
+      background: 'rgba(0,0,0,0.3)',
+      padding: '0.5rem',
+      borderRadius: '8px',
+    },
+    interactionPrompt: {
+      textAlign: 'center',
+      fontSize: '0.9rem',
+      color: '#ffeaa7',
+      marginTop: '0.5rem',
+      padding: '0.5rem',
+      background: 'rgba(0,0,0,0.3)',
+      borderRadius: '8px',
+      cursor: 'pointer',
     },
   };
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>📖 Audio Player</h2>
+      <h2 style={styles.title}>🎧 Kiswahili Audio Player</h2>
 
       <audio ref={audioRef} preload="auto" />
 
       <div style={styles.pageInfo}>
-        Page <strong>{currentPage}</strong> of {TOTAL_PAGES}
+        📖 Page <strong>{currentPage}</strong> of {TOTAL_PAGES}
       </div>
 
       <div style={styles.controls}>
@@ -228,6 +291,12 @@ const AudioPlayer = () => {
           style={{
             ...styles.button,
             ...(currentPage <= 1 ? styles.buttonDisabled : {}),
+          }}
+          onMouseEnter={(e) => {
+            if (currentPage > 1) e.target.style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = 'scale(1)';
           }}
         >
           ⏮ Prev
@@ -241,6 +310,12 @@ const AudioPlayer = () => {
             ...styles.playButton,
             ...(isLoading ? styles.buttonDisabled : {}),
           }}
+          onMouseEnter={(e) => {
+            if (!isLoading) e.target.style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = 'scale(1)';
+          }}
         >
           {isLoading ? '⏳ Loading...' : isPlaying ? '⏸ Pause' : '▶ Play'}
         </button>
@@ -251,6 +326,12 @@ const AudioPlayer = () => {
           style={{
             ...styles.button,
             ...(currentPage >= TOTAL_PAGES ? styles.buttonDisabled : {}),
+          }}
+          onMouseEnter={(e) => {
+            if (currentPage < TOTAL_PAGES) e.target.style.transform = 'scale(1.05)';
+          }}
+          onMouseLeave={(e) => {
+            e.target.style.transform = 'scale(1)';
           }}
         >
           Next ⏭
@@ -263,8 +344,9 @@ const AudioPlayer = () => {
             type="checkbox"
             checked={autoPlay}
             onChange={(e) => setAutoPlay(e.target.checked)}
+            style={{ marginRight: '8px' }}
           />
-          {' '}Auto‑play next page
+          🔄 Auto‑play next page
         </label>
       </div>
 
@@ -275,11 +357,14 @@ const AudioPlayer = () => {
           max={TOTAL_PAGES}
           value={currentPage}
           onChange={(e) => goToPage(parseInt(e.target.value, 10))}
-          style={styles.range}
+          style={{
+            ...styles.range,
+            ...styles.rangeWebkit,
+          }}
         />
         <div style={styles.sliderLabels}>
-          <span>1</span>
-          <span>{TOTAL_PAGES}</span>
+          <span>Page 1</span>
+          <span>Page {TOTAL_PAGES}</span>
         </div>
       </div>
 
@@ -293,12 +378,26 @@ const AudioPlayer = () => {
           style={styles.pageInput}
         />
         <button onClick={() => goToPage(currentPage)} style={styles.goButton}>
-          Go
+          Go to Page
         </button>
       </div>
 
-      {isLoading && <div style={styles.loadingText}>Loading audio…</div>}
-      {error && <div style={styles.errorText}>{error}</div>}
+      {isLoading && <div style={styles.loadingText}>🎵 Loading audio...</div>}
+      {error && (
+        <div style={styles.errorText}>
+          ⚠️ {error}
+          {needsUserInteraction && (
+            <div style={{ marginTop: '8px', fontSize: '12px' }}>
+              👆 Click the play button above to start listening
+            </div>
+          )}
+        </div>
+      )}
+      {needsUserInteraction && !error && (
+        <div style={styles.interactionPrompt} onClick={togglePlayPause}>
+          🎵 Click here or press play to start listening
+        </div>
+      )}
     </div>
   );
 };
